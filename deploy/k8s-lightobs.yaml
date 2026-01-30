@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lightobs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lightobs-server
+  namespace: lightobs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lightobs-server
+  template:
+    metadata:
+      labels:
+        app: lightobs-server
+    spec:
+      containers:
+        - name: server
+          image: lightobs-server:dev
+          args:
+            - -listen=:8080
+            - -db=/data/traffic.duckdb
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lightobs-server
+  namespace: lightobs
+spec:
+  selector:
+    app: lightobs-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: lightobs-agent
+  namespace: lightobs
+spec:
+  selector:
+    matchLabels:
+      app: lightobs-agent
+  template:
+    metadata:
+      labels:
+        app: lightobs-agent
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: agent
+          image: lightobs-agent:dev
+          args:
+            - -interface=any
+            - -server-ip=lightobs-server.lightobs.svc.cluster.local
+            - -server-port=8080
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_RAW
+                - NET_ADMIN

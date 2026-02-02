@@ -9,5 +9,6 @@ import (
 type Store interface {
 	Insert(ctx context.Context, logEntry *model.TrafficLog) error
 	QueryByIP(ctx context.Context, ip string, limit int) ([]model.TrafficLog, error)
+	QueryByPID(ctx context.Context, pid int, limit int) ([]model.TrafficLog, error)
 	Close() error
 }

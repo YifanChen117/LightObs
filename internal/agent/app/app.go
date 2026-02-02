@@ -12,6 +12,7 @@ import (
 	"lightobs/internal/agent/capture"
 	"lightobs/internal/agent/filter"
 	"lightobs/internal/agent/httpmatcher"
+	"lightobs/internal/agent/pidmap"
 	"lightobs/internal/agent/report"
 )
 
@@ -38,6 +39,15 @@ func Run(ctx context.Context, cfg Config) error {
 
 	rep := report.NewClient(cfg.ServerIP, cfg.ServerPort, cfg.HTTPPostTimeout)
 	m := httpmatcher.NewMatcher(cfg.RequestTimeout)
+	var resolver *pidmap.Resolver
+	if cfg.EnableEBPF {
+		r, err := pidmap.NewResolver()
+		if err != nil {
+			return err
+		}
+		resolver = r
+		defer resolver.Close()
+	}
 
 	log.Printf("开始抓包：iface=%s -> server=%s:%d", cfg.Interface, cfg.ServerIP, cfg.ServerPort)
 
@@ -92,6 +102,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 
 		if logEntry, ok := m.ObserveResponse(meta); ok {
+			if resolver != nil {
+				logEntry.PID = resolver.Lookup(logEntry.SrcIP, logEntry.SrcPort, logEntry.DstIP, logEntry.DstPort)
+			}
 			if err := rep.Upload(ctx, logEntry); err != nil {
 				log.Printf("上报失败（忽略继续抓包）：%v", err)
 			}

@@ -61,14 +61,19 @@ spec:
         app: lightobs-agent
     spec:
       hostNetwork: true
+      hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: agent
           image: lightobs-agent:dev
+          command:
+            - /bin/sh
+            - -c
           args:
-            - -interface=any
-            - -server-ip=lightobs-server.lightobs.svc.cluster.local
-            - -server-port=8080
+            - >
+              mount | grep -q '/sys/kernel/tracing' || mount -t tracefs tracefs /sys/kernel/tracing;
+              mount | grep -q '/sys/kernel/debug' || mount -t debugfs debugfs /sys/kernel/debug;
+              exec /lightobs-agent -interface=any -server-ip=lightobs-server.lightobs.svc.cluster.local -server-port=8080
           securityContext:
             privileged: true
             capabilities:

@@ -49,18 +49,29 @@ func (h *Handlers) Upload(c *gin.Context) {
 }
 
 func (h *Handlers) Query(c *gin.Context) {
-	ip := c.Query("ip")
-	if net.ParseIP(ip) == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ip 参数非法"})
+	if raw := c.Query("pid"); raw != "" {
+		pid, err := strconv.Atoi(raw)
+		if err != nil || pid <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "pid 参数非法"})
+			return
+		}
+		limit := parseLimit(c.Query("limit"))
+		rows, err := h.store.QueryByPID(c.Request.Context(), pid, limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败：" + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, rows)
 		return
 	}
 
-	limit := 200
-	if raw := c.Query("limit"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 2000 {
-			limit = v
-		}
+	ip := c.Query("ip")
+	if net.ParseIP(ip) == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ip 或 pid 必须提供其一"})
+		return
 	}
+
+	limit := parseLimit(c.Query("limit"))
 
 	rows, err := h.store.QueryByIP(c.Request.Context(), ip, limit)
 	if err != nil {
@@ -75,3 +86,12 @@ func validPort(p int) bool {
 	return p > 0 && p <= 65535
 }
 
+func parseLimit(raw string) int {
+	limit := 200
+	if raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 2000 {
+			limit = v
+		}
+	}
+	return limit
+}

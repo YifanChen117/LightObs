@@ -19,6 +19,7 @@ func main() {
 	flag.StringVar(&cfg.ServerIP, "server-ip", "", "Server IP，必填")
 	flag.IntVar(&cfg.ServerPort, "server-port", 0, "Server Port，必填")
 	flag.DurationVar(&cfg.RequestTimeout, "request-timeout", 30*time.Second, "HTTP 匹配缓存超时时间")
+	flag.BoolVar(&cfg.EnableEBPF, "enable-ebpf", true, "启用 eBPF 进程采集")
 	flag.Parse()
 
 	if cfg.Interface == "" || cfg.ServerIP == "" || cfg.ServerPort == 0 {

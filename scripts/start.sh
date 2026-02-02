@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 确保国内环境下载依赖顺畅
+export GOPROXY=https://goproxy.cn,direct
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCKER_CONFIG=/tmp/docker-nocreds
 
@@ -24,6 +27,19 @@ build_images() {
 load_images() {
   kind load docker-image lightobs-server:dev
   kind load docker-image lightobs-agent:dev
+}
+
+ensure_tracefs() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "未检测到 docker，请先启用 Docker Desktop 的 WSL 集成或安装 Docker Engine"
+    exit 1
+  fi
+  for n in $(kind get nodes); do
+    docker exec "$n" sh -c "mount | grep -q '/sys/kernel/tracing' || mount -t tracefs tracefs /sys/kernel/tracing"
+    docker exec "$n" sh -c "mount | grep -q '/sys/kernel/tracing'"
+    docker exec "$n" sh -c "mount | grep -q '/sys/kernel/debug' || mount -t debugfs debugfs /sys/kernel/debug"
+    docker exec "$n" sh -c "mount | grep -q '/sys/kernel/debug'"
+  done
 }
 
 deploy_lightobs() {
@@ -57,11 +73,55 @@ run_client_query() {
   echo "完成。nginx Pod IP=${NGINX_POD_IP}"
 }
 
+run_local() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    if ! sudo -n true 2>/dev/null; then
+      echo "请使用 sudo 运行：sudo bash scripts/start.sh local"
+      exit 1
+    fi
+  fi
+  mkdir -p "${ROOT}/bin"
+  go build -o "${ROOT}/bin/lightobs-server" "${ROOT}/cmd/server"
+  go build -o "${ROOT}/bin/lightobs-agent"  "${ROOT}/cmd/agent"
+  go build -o "${ROOT}/bin/lightobs-client" "${ROOT}/cmd/client"
+  "${ROOT}/bin/lightobs-server" -listen :8080 -db-driver sqlite -db "${ROOT}/traffic.sqlite" >/tmp/lightobs-server.log 2>&1 &
+  SERVER_PID=$!
+  sleep 1
+  IFACE="$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
+  if [[ -z "${IFACE:-}" ]]; then
+    IFACE="$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|ens|enp)' | head -n1)"
+  fi
+  if [[ -z "${IFACE:-}" ]]; then
+    echo "无法自动检测网卡名，请手动运行 agent 并指定 -interface"
+    kill "${SERVER_PID}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  sudo -n "${ROOT}/bin/lightobs-agent" -interface "${IFACE}" -server-ip 127.0.0.1 -server-port 8080 -enable-ebpf=true >/tmp/lightobs-agent.log 2>&1 &
+  AGENT_PID=$!
+  sleep 1
+  # 确保获取 IPv4 地址
+  TARGET_IP="$(getent ahostsv4 neverssl.com | awk '{print $1; exit}')"
+  if [[ -z "${TARGET_IP}" ]]; then
+    echo "无法解析 neverssl.com (IPv4)，尝试使用 1.1.1.1"
+    TARGET_IP="1.1.1.1"
+  fi
+
+  echo "产生测试流量: curl http://${TARGET_IP} ..."
+  # 强制使用 IPv4
+  curl -4 -s "http://${TARGET_IP}" >/dev/null || true
+  sleep 2
+  "${ROOT}/bin/lightobs-client" -ip "${TARGET_IP}" -server http://127.0.0.1:8080 || true
+  kill "${AGENT_PID}"  >/dev/null 2>&1 || true
+  kill "${SERVER_PID}" >/dev/null 2>&1 || true
+  echo "本地跑通完成：interface=${IFACE} target_ip=${TARGET_IP}"
+}
+
 case "${mode}" in
   full)
     ensure_kind
     build_images
     load_images
+    ensure_tracefs
     deploy_lightobs
     deploy_demo
     show_logs
@@ -84,6 +144,9 @@ case "${mode}" in
     ensure_kind
     run_client_query
     ;;
+  local)
+    run_local
+    ;;
   build)
     ensure_kind
     build_images
@@ -95,6 +158,7 @@ case "${mode}" in
     echo "deploy: 创建集群(如需) + 部署 + demo + 日志"
     echo "restart: 只滚动重启 server/agent"
     echo "query: 仅查询（会自动 port-forward 并运行 client）"
+    echo "local: 本地启动 server/agent + 生成流量 + 查询"
     echo "build: 仅构建并导入镜像"
     exit 1
     ;;

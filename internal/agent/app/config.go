@@ -8,5 +8,5 @@ type Config struct {
 	ServerPort      int
 	RequestTimeout  time.Duration
 	HTTPPostTimeout time.Duration
+	EnableEBPF      bool
 }
-

@@ -16,7 +16,8 @@ import (
 func main() {
 	var cfg app.Config
 	flag.StringVar(&cfg.ListenAddr, "listen", ":8080", "监听地址")
-	flag.StringVar(&cfg.DBPath, "db", "./traffic.duckdb", "DuckDB 文件路径")
+	flag.StringVar(&cfg.DBDriver, "db-driver", "duckdb", "数据库类型：duckdb 或 sqlite")
+	flag.StringVar(&cfg.DBPath, "db", "", "数据库文件路径")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

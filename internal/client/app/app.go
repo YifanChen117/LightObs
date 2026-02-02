@@ -21,7 +21,11 @@ func Run(cfg Config) error {
 	}
 	u.Path = "/api/v1/query"
 	q := u.Query()
-	q.Set("ip", cfg.IP)
+	if cfg.PID > 0 {
+		q.Set("pid", fmt.Sprintf("%d", cfg.PID))
+	} else {
+		q.Set("ip", cfg.IP)
+	}
 	u.RawQuery = q.Encode()
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -47,13 +51,14 @@ func Run(cfg Config) error {
 
 func renderTable(rows []model.TrafficLog) {
 	t := tablewriter.NewWriter(os.Stdout)
-	t.SetHeader([]string{"Time", "Source", "Destination", "Method", "Path", "Status", "Latency(ms)", "Size"})
+	t.SetHeader([]string{"Time", "PID", "Source", "Destination", "Method", "Path", "Status", "Latency(ms)", "Size"})
 	t.SetAutoWrapText(false)
 	t.SetRowLine(false)
 
 	for _, r := range rows {
 		t.Append([]string{
 			r.Timestamp.Format(time.RFC3339Nano),
+			fmt.Sprintf("%d", r.PID),
 			fmt.Sprintf("%s:%d", r.SrcIP, r.SrcPort),
 			fmt.Sprintf("%s:%d", r.DstIP, r.DstPort),
 			r.HTTPMethod,
@@ -65,4 +70,3 @@ func renderTable(rows []model.TrafficLog) {
 	}
 	t.Render()
 }
-

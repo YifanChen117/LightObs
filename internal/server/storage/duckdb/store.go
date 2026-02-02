@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS traffic_logs (
 	src_port    INTEGER,
 	dst_ip      VARCHAR,
 	dst_port    INTEGER,
+	pid         INTEGER,
 	http_method VARCHAR,
 	http_path   VARCHAR,
 	status_code INTEGER,
@@ -48,13 +49,16 @@ CREATE TABLE IF NOT EXISTS traffic_logs (
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("建表失败：%w", err)
 	}
+	if _, err := s.db.Exec(`ALTER TABLE traffic_logs ADD COLUMN IF NOT EXISTS pid INTEGER;`); err != nil {
+		return fmt.Errorf("更新表结构失败：%w", err)
+	}
 
 	// 插入使用 prepared statement，减少每次写入的 SQL 解析开销。
 	stmt, err := s.db.Prepare(`
 INSERT INTO traffic_logs (
-	timestamp, src_ip, src_port, dst_ip, dst_port,
+	timestamp, src_ip, src_port, dst_ip, dst_port, pid,
 	http_method, http_path, status_code, latency_ms, packet_size
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `)
 	if err != nil {
 		return fmt.Errorf("准备插入语句失败：%w", err)
@@ -73,6 +77,7 @@ func (s *Store) Insert(ctx context.Context, logEntry *model.TrafficLog) error {
 		logEntry.SrcPort,
 		logEntry.DstIP,
 		logEntry.DstPort,
+		logEntry.PID,
 		logEntry.HTTPMethod,
 		logEntry.HTTPPath,
 		logEntry.StatusCode,
@@ -92,7 +97,7 @@ func (s *Store) QueryByIP(ctx context.Context, ip string, limit int) ([]model.Tr
 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
-	timestamp, src_ip, src_port, dst_ip, dst_port,
+	timestamp, src_ip, src_port, dst_ip, dst_port, COALESCE(pid, 0),
 	http_method, http_path, status_code, latency_ms, packet_size
 FROM traffic_logs
 WHERE src_ip = ? OR dst_ip = ?
@@ -113,6 +118,50 @@ LIMIT ?;
 			&r.SrcPort,
 			&r.DstIP,
 			&r.DstPort,
+			&r.PID,
+			&r.HTTPMethod,
+			&r.HTTPPath,
+			&r.StatusCode,
+			&r.LatencyMS,
+			&r.PacketSize,
+		); err != nil {
+			return nil, fmt.Errorf("读取行失败：%w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历结果失败：%w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) QueryByPID(ctx context.Context, pid int, limit int) ([]model.TrafficLog, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+	timestamp, src_ip, src_port, dst_ip, dst_port, COALESCE(pid, 0),
+	http_method, http_path, status_code, latency_ms, packet_size
+FROM traffic_logs
+WHERE pid = ?
+ORDER BY timestamp DESC
+LIMIT ?;
+`, pid, limit)
+	if err != nil {
+		return nil, fmt.Errorf("查询失败：%w", err)
+	}
+	defer rows.Close()
+	out := make([]model.TrafficLog, 0, 64)
+	for rows.Next() {
+		var r model.TrafficLog
+		if err := rows.Scan(
+			&r.Timestamp,
+			&r.SrcIP,
+			&r.SrcPort,
+			&r.DstIP,
+			&r.DstPort,
+			&r.PID,
 			&r.HTTPMethod,
 			&r.HTTPPath,
 			&r.StatusCode,

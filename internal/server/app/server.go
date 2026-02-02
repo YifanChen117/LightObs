@@ -8,23 +8,39 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lightobs/internal/server/api"
+	"lightobs/internal/server/storage"
 	"lightobs/internal/server/storage/duckdb"
+	"lightobs/internal/server/storage/sqlite"
 )
 
 type Server struct {
 	httpServer *http.Server
-	store      *duckdb.Store
+	store      storage.Store
 }
 
 func NewServer(cfg Config) (*Server, error) {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8080"
 	}
+	if cfg.DBDriver == "" {
+		cfg.DBDriver = "duckdb"
+	}
 	if cfg.DBPath == "" {
-		cfg.DBPath = "./traffic.duckdb"
+		if cfg.DBDriver == "sqlite" {
+			cfg.DBPath = "./traffic.sqlite"
+		} else {
+			cfg.DBPath = "./traffic.duckdb"
+		}
 	}
 
-	store, err := duckdb.NewStore(cfg.DBPath)
+	var st storage.Store
+	var err error
+	switch cfg.DBDriver {
+	case "sqlite":
+		st, err = sqlite.NewStore(cfg.DBPath)
+	default:
+		st, err = duckdb.NewStore(cfg.DBPath)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +48,7 @@ func NewServer(cfg Config) (*Server, error) {
 	router := gin.New()
 	router.Use(gin.Recovery())
 
-	h := api.NewHandlers(store)
+	h := api.NewHandlers(st)
 	v1 := router.Group("/api/v1")
 	{
 		v1.POST("/upload", h.Upload)
@@ -40,7 +56,7 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	return &Server{
-		store: store,
+		store: st,
 		httpServer: &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           router,

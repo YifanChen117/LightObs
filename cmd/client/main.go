@@ -11,10 +11,11 @@ import (
 func main() {
 	var cfg app.Config
 	flag.StringVar(&cfg.IP, "ip", "", "目标 IP，必填")
+	flag.IntVar(&cfg.PID, "pid", 0, "进程 ID，用于按进程查询")
 	flag.StringVar(&cfg.Server, "server", "http://127.0.0.1:8080", "Server 地址")
 	flag.Parse()
 
-	if cfg.IP == "" {
+	if cfg.IP == "" && cfg.PID == 0 {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -24,4 +25,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

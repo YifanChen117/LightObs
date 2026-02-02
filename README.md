@@ -40,6 +40,7 @@ LiteObs 初始版本定位于一个轻量级的 Kubernetes 流量观测系统，
 - 测试 : 完善了 internal/server/api 的单元测试，通过 fakeStore 覆盖了所有查询路径。 
 
 # 项目结构
+```
 LiteObs/
 ├── cmd/                # 入口文件 (Agent, Server, Client)
 ├── pkg/model/          # 共享数据模型 (TrafficLog)
@@ -54,7 +55,7 @@ LiteObs/
 │   └── client/         # CLI 客户端逻辑
 ├── deploy/             # K8s 部署清单 (DaemonSet, Deployment)
 └── scripts/            # 自动化构建与部署脚本
-
+```
 # 数据流向
 数据流向 (Data Flow)
 1. Capture : Agent ( libpcap ) 捕获宿主机网络接口的原始数据包。
@@ -64,6 +65,8 @@ LiteObs/
 5. Query : Client 发起查询请求，Server 检索数据库并返回带进程信息的流量视图。
 
 # 使用方法
+```
 bash scripts/start.sh full（完整构建-部署-查询）
 bash scripts/start.sh query（仅查询）
 bash scripts/start.sh local（本地查询）
+```

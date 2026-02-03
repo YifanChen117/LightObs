@@ -34,7 +34,7 @@ LiteObs 初始版本定位于一个轻量级的 Kubernetes 流量观测系统，
   - Pure Go : 引入 modernc.org/sqlite ，实现了无 CGO 依赖的嵌入式数据库支持。
   - 双模式切换 : 支持通过 Server 启动参数 -db-type 在 DuckDB 和 SQLite 之间切换。 
   
-## 新增需求3 3: Client端支持PID关联的ip流向查询
+## 新增需求 3: Client端支持PID关联的ip流向查询
 - Server : 新增 QueryByPID 查询逻辑，支持按进程 ID 过滤流量日志。
 - Client : 命令行工具新增 -pid 参数，支持开发者直接追踪特定进程的流量。
 - 测试 : 完善了 internal/server/api 的单元测试，通过 fakeStore 覆盖了所有查询路径。 

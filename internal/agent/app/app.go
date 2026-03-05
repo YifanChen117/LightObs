@@ -20,6 +20,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.HTTPPostTimeout == 0 {
 		cfg.HTTPPostTimeout = 5 * time.Second
 	}
+	if cfg.WatchPort == 0 {
+		cfg.WatchPort = 80
+	}
 
 	handle, err := capture.NewAFPacketHandle(cfg.Interface, 65535)
 	if err != nil {
@@ -27,9 +30,8 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer handle.Close()
 
-	// 这里使用 classic BPF 直接在内核态过滤，只把 TCP 且端口 80 的包送到用户态。
-	// 这样能显著降低用户态解码与 HTTP 匹配的开销，也满足“必须设置 BPF”的要求。
-	rawIns, err := filter.TCPPort80BPF()
+	// 内核态 BPF 过滤：只让目标端口的 TCP 包进入用户态，降低处理开销。
+	rawIns, err := filter.TCPPortBPF(cfg.WatchPort)
 	if err != nil {
 		return err
 	}
@@ -37,8 +39,22 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("设置 BPF 失败：%w", err)
 	}
 
+	// 用户态 IP 白名单过滤：当 Operator 注入了 TargetIPs 时，二次过滤只留目标 Pod 流量。
+	// TargetIPs 为空时 IPFilter 自动进入"放行全部"模式，与旧 DaemonSet 行为完全兼容。
+	ipFilter, err := filter.NewIPFilter(cfg.TargetIPs)
+	if err != nil {
+		return fmt.Errorf("构建 IP 过滤器失败：%w", err)
+	}
+
+	if len(cfg.TargetIPs) > 0 {
+		log.Printf("IP 白名单过滤已启用，目标 IP：%v", cfg.TargetIPs)
+	} else {
+		log.Printf("IP 白名单过滤未启用，采集所有 %d 端口的流量", cfg.WatchPort)
+	}
+
 	rep := report.NewClient(cfg.ServerIP, cfg.ServerPort, cfg.HTTPPostTimeout)
 	m := httpmatcher.NewMatcher(cfg.RequestTimeout)
+
 	var resolver *pidmap.Resolver
 	if cfg.EnableEBPF {
 		r, err := pidmap.NewResolver()
@@ -49,7 +65,8 @@ func Run(ctx context.Context, cfg Config) error {
 		defer resolver.Close()
 	}
 
-	log.Printf("开始抓包：iface=%s -> server=%s:%d", cfg.Interface, cfg.ServerIP, cfg.ServerPort)
+	log.Printf("开始抓包：iface=%s port=%d -> server=%s:%d",
+		cfg.Interface, cfg.WatchPort, cfg.ServerIP, cfg.ServerPort)
 
 	cleanupTicker := time.NewTicker(2 * time.Second)
 	defer cleanupTicker.Stop()
@@ -77,6 +94,11 @@ func Run(ctx context.Context, cfg Config) error {
 			continue
 		}
 		ipv4, _ := ip4.(*layers.IPv4)
+
+		// 用户态 IP 白名单过滤（Operator 模式下精准匹配目标 Pod）
+		if !ipFilter.Allow(ipv4.SrcIP.String(), ipv4.DstIP.String()) {
+			continue
+		}
 
 		tcpL := packet.Layer(layers.LayerTypeTCP)
 		if tcpL == nil {

@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: docker.m.daocloud.io/library/nginx:1.27
+          image: nginx:1.27
           ports:
             - containerPort: 80
 ---
@@ -45,8 +45,8 @@ metadata:
 spec:
   restartPolicy: Always
   containers:
-    - name: curl
-      image: docker.m.daocloud.io/curlimages/curl:8.6.0
+    - name: wget
+      image: nginx:1.27
       command:
         - sh
         - -c
@@ -54,6 +54,6 @@ spec:
           set -e
           echo "start curling demo-nginx..."
           while true; do
-            curl -sS -o /dev/null -w "code=%{http_code} time=%{time_total}\n" http://demo-nginx.demo.svc.cluster.local/ || true
-            sleep 0.2
+            wget -q -O /dev/null http://demo-nginx.demo.svc.cluster.local/ && echo "ok" || echo "fail"
+            sleep 0.5
           done

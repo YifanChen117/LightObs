@@ -1,0 +1,154 @@
+---
+# ──────────────────────────────────────────────────────────
+# ServiceAccount：Operator 运行时使用的身份
+# ──────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lightobs-operator
+  namespace: lightobs
+  labels:
+    app.kubernetes.io/name: lightobs-operator
+    app.kubernetes.io/component: operator
+
+---
+# ──────────────────────────────────────────────────────────
+# ClusterRole：Operator 需要跨 Namespace 读取 Pod 信息
+# ──────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lightobs-operator
+  labels:
+    app.kubernetes.io/name: lightobs-operator
+rules:
+  # ── CRD 读写（主资源 + status 子资源）──────────────────
+  - apiGroups: ["lightobs.io"]
+    resources: ["podobservations"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["lightobs.io"]
+    resources: ["podobservations/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["lightobs.io"]
+    resources: ["podobservations/finalizers"]
+    verbs: ["update"]
+
+  # ── 读取业务 Pod（查询目标 Pod 的 IP 和节点）──────────
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # ── 管理 Agent Pod（在 lightobs namespace 创建/删除）──
+  # 注意：这里用 ClusterRole 覆盖，在 ClusterRoleBinding 中绑定到 lightobs ns
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete"]
+
+  # ── Namespace 管理（确保 lightobs ns 存在）─────────────
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create"]
+
+  # ── Node 信息（未来扩展：节点筛选、亲和性判断）─────
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+
+  # ── 事件记录（kubectl describe 中可见的 Event）─────────
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # ── Leader Election（多实例部署时防止脑裂）─────────────
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update", "patch"]
+
+---
+# ──────────────────────────────────────────────────────────
+# ClusterRoleBinding：将上述权限绑定到 Operator SA
+# ──────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lightobs-operator
+  labels:
+    app.kubernetes.io/name: lightobs-operator
+subjects:
+  - kind: ServiceAccount
+    name: lightobs-operator
+    namespace: lightobs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lightobs-operator
+
+---
+# ──────────────────────────────────────────────────────────
+# Deployment：Operator 控制器本身
+# ──────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lightobs-operator
+  namespace: lightobs
+  labels:
+    app.kubernetes.io/name: lightobs-operator
+    app.kubernetes.io/component: operator
+spec:
+  # 单副本部署（如需高可用，调整副本数并开启 --leader-elect）
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lightobs-operator
+  template:
+    metadata:
+      labels:
+        app: lightobs-operator
+        app.kubernetes.io/name: lightobs-operator
+    spec:
+      serviceAccountName: lightobs-operator
+      # 不使用 hostNetwork，Operator 通过 K8s API Server 通信即可
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: operator
+          image: lightobs-operator:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --metrics-bind-address=:8090
+            - --health-probe-bind-address=:8091
+            # 生产环境多副本时开启：
+            # - --leader-elect=true
+          ports:
+            - name: metrics
+              containerPort: 8090
+              protocol: TCP
+            - name: healthz
+              containerPort: 8091
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: healthz
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -1,0 +1,20 @@
+ARG GO_IMAGE=golang:1.22
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+FROM ${GO_IMAGE} AS build
+ARG GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
+ARG GOSUMDB=off
+ENV GOPROXY=${GOPROXY}
+ENV GOSUMDB=${GOSUMDB}
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Operator 不依赖 CGO（无 DuckDB/gopacket），静态编译产出更小的镜像
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /out/lightobs-operator ./cmd/operator
+
+FROM ${RUNTIME_IMAGE}
+WORKDIR /
+COPY --from=build /out/lightobs-operator /lightobs-operator
+ENTRYPOINT ["/lightobs-operator"]

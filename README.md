@@ -39,34 +39,73 @@ LiteObs 初始版本定位于一个轻量级的 Kubernetes 流量观测系统，
 - Client : 命令行工具新增 -pid 参数，支持开发者直接追踪特定进程的流量。
 - 测试 : 完善了 internal/server/api 的单元测试，通过 fakeStore 覆盖了所有查询路径。 
 
-# 项目结构
-```
+# LightObs V3 引入 Operator 架构升级
+
+在之前的版本中，Agent 以 DaemonSet 形式全局部署，缺乏针对性和动态管理能力。V3 版本引入了 Kubernetes Operator 模式与自定义资源（CRD），实现了完全声明式的观测目标管理。具体内容可参考README_Operator.md
+
+## 核心功能与优势 
+1. **声明式目标管理 (CRD)**：引入 `PodObservation` CRD。用户只需提交一份 YAML 声明需要观测哪个应用（通过 Label Selector）、哪个端口，无需关心底层 Agent 的生命周期。
+2. **动态自动发现与扩缩容感知 (Auto-Discovery)**：Operator 实时监听 K8s 集群。当目标业务 Pod 扩容或缩容时，Operator 会自动发现新 Pod 的 IP，并动态更新 Agent 的抓包白名单，做到**配置零干预**。
+3. **精准按需观测 (Targeted Observation)**：废弃了全局 DaemonSet 抓包。Operator 会精确计算目标业务 Pod 所在的节点，并**仅在这些节点上**按需拉起专属的 Agent Pod，大幅降低集群性能开销。
+4. **故障自愈与状态对账 (Self-Healing)**：如果底层 Agent Pod 意外崩溃或被误删，Operator 的 Reconcile 循环会在秒级内发现实际状态与期望状态的差异，并瞬间重建 Agent。
+5. **配置热更新 (Dynamic Config)**：通过 `kubectl patch` 修改 CRD（例如更改观测端口），Operator 会自动感知并更新 Agent 配置，全程无需 SSH 登录节点。
+
+## 新增文件结构与功能
+- **cmd/operator/main.go**: Operator 的入口程序，负责初始化 Manager 并注册 Controller。
+- **internal/operator/api/v1alpha1/types.go**: 定义 `PodObservation` CRD 的 Go 结构体（Spec 与 Status）。
+- **internal/operator/controller/podobservation_controller.go**: 核心控制器逻辑：执行对账循环 (Reconcile)，计算目标节点并动态管理 Agent Pod 的生命周期。
+- **deploy/crds/podobservation.yaml**: `PodObservation` 的 Kubernetes CustomResourceDefinition 资源注册文件。
+- **deploy/operator/operator.yaml**: Operator 控制器本身的 K8s 部署清单 (包含 Deployment, ClusterRole 等 RBAC 权限声明, ServiceAccount)。
+- **scripts/start_with_operator.sh**: 一键构建并启动包含 Operator 的完整集群与 Demo 业务环境的自动化脚本。
+- **scripts/demo_operator_magic.sh**: Operator 核心优势交互式演示脚本 (带你一步步体验扩容感知、故障自愈、配置热更新的 Magic 效果)。
+
+## 控制流向 (Operator Control Flow)
+1. **Apply CRD**: 用户向 K8s 提交 `PodObservation` 资源，声明期望观测的目标（如打有 `app: web` 标签的 Pod）。
+2. **Watch/Event**: Operator 监听到 `PodObservation` 的创建/更新事件，以及业务 Pod 的生命周期变动。
+3. **Calculate**: Operator 提取所有匹配业务 Pod 的 IP，并归纳它们当前分布在哪些宿主机节点上。
+4. **Reconcile (对账)**: Operator 检查对应节点上是否已存在服务于该 CR 的 Agent Pod；若缺失则动态拉起，若存在但过期参数（如目标 IP 增减）则进行更新/重建，抹平期望与实际状态的差异。
+5. **Targeted Capture**: 动态创建出的 Agent 进程被精准注入了 `-target-ips` 参数，仅对指定 IP 开启 eBPF 或 Pcap 抓包，极大降低系统开销。
+
+# 完整项目结构
+```text
 LiteObs/
-├── cmd/                # 入口文件 (Agent, Server, Client)
-├── pkg/model/          # 共享数据模型 (TrafficLog)
+├── build/              # Dockerfile (Server, Agent, Operator)
+├── cmd/                # 各个组件的入口程序
+│   ├── agent/  
+│   ├── server/ 
+│   ├── client/ 
+│   └── operator/       # Operator 启动入口
+├── pkg/
+│   └── model/          # 共享数据模型 (TrafficLog)
 ├── internal/
-│   ├── agent/          # Agent 核心逻辑
-│   │   ├── capture/    # gopacket 抓包
-│   │   ├── pidmap/     # eBPF 进程关联 (Cilium/ebpf)
-│   │   └── report/     # 日志上报
-│   ├── server/         # Server 核心逻辑
-│   │   ├── api/        # HTTP Handler & 路由
-│   │   └── storage/    # 存储接口 (SQLite/DuckDB 实现)
-│   └── client/         # CLI 客户端逻辑
-├── deploy/             # K8s 部署清单 (DaemonSet, Deployment)
-└── scripts/            # 自动化构建与部署脚本
+│   ├── agent/          # Agent 核心抓包侧逻辑 (eBPF pidmap, pcap parser, report)
+│   ├── server/         # Server 核心存储侧逻辑 (API Handler, SQLite/DuckDB Storage)
+│   ├── client/         # CLI 客户端逻辑
+│   └── operator/       # Operator 核心控制面逻辑
+│       ├── api/        # CRD 结构体定义 (v1alpha1)
+│       └── controller/ # Reconcile 状态对账控制器
+├── deploy/             # K8s 部署清单集合
+│   ├── crds/           # 自定义资源定义
+│   ├── operator/       # Operator 本身部署文件
+│   ├── k8s-lightobs.yaml # Server 部署文件
+│   └── k8s-demo.yaml   # 用于供用户演示的 demo 空间应用
+└── scripts/            # 自动化脚本工具
+    ├── start_with_operator.sh  # 包含 Operator 架构的一键建站/部署测试脚本
+    └── demo_operator_magic.sh  # 交互式 Operator 优势演示脚本
 ```
-# 数据流向
-数据流向 (Data Flow)
-1. Capture : Agent ( libpcap ) 捕获宿主机网络接口的原始数据包。
-2. Enrichment : Agent 解析 HTTP 协议，并通过 eBPF Map ( pidmap ) 实时查找对应的宿主机 PID。
-3. Transport : 结构化的 TrafficLog (含 PID) 被发送至 Server。
-4. Storage : Server 根据配置将数据写入 SQLite 或 DuckDB。
-5. Query : Client 发起查询请求，Server 检索数据库并返回带进程信息的流量视图。
 
 # 使用方法
+
+**启动带有 Operator 完整能力的演示集群：**
+```bash
+# 自动部署 Kind 集群、打包镜像、拉起 Server + Operator + Demo 应用并进行完整连通性测试
+bash scripts/start_with_operator.sh full
+
+#  Operator 的动态自愈/发现机制 demo
+bash scripts/demo_operator_magic.sh
 ```
-bash scripts/start.sh full（完整构建-部署-查询）
-bash scripts/start.sh query（仅查询）
-bash scripts/start.sh local（本地查询）
+
+*(附：旧版本全局 DaemonSet 启动方式 )*
+```bash
+bash scripts/start.sh full
 ```

@@ -1,0 +1,139 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: podobservations.lightobs.io
+spec:
+  group: lightobs.io
+  names:
+    kind: PodObservation
+    listKind: PodObservationList
+    plural: podobservations
+    singular: podobservation
+    shortNames:
+      - pobs
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        # 独立 Status 子资源：防止更新 Status 时覆盖 Spec，
+        # 同时限制普通用户只能修改 Spec，Operator 才能修改 Status。
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+          description: 观测任务当前阶段
+        - name: Nodes
+          type: integer
+          jsonPath: .status.observedNodes
+          description: 已部署 Agent 的节点数
+        - name: Pods
+          type: integer
+          jsonPath: .status.targetPodCount
+          description: 匹配到的目标 Pod 数
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: PodObservation 声明一个 HTTP 流量观测任务
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - selector
+              properties:
+                selector:
+                  type: object
+                  description: 目标 Pod 的 LabelSelector，语义与 K8s 原生 selector 一致
+                  properties:
+                    matchLabels:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    matchExpressions:
+                      type: array
+                      items:
+                        type: object
+                        required: [key, operator]
+                        properties:
+                          key:
+                            type: string
+                          operator:
+                            type: string
+                            enum: [In, NotIn, Exists, DoesNotExist]
+                          values:
+                            type: array
+                            items:
+                              type: string
+                capture:
+                  type: object
+                  description: 采集参数
+                  properties:
+                    port:
+                      type: integer
+                      description: 要监听的目标 HTTP 端口
+                      minimum: 1
+                      maximum: 65535
+                      default: 80
+                    interface:
+                      type: string
+                      description: Agent 监听的网卡名，默认 "any"
+                      default: "any"
+                    enableEBPF:
+                      type: boolean
+                      description: 是否启用 eBPF PID 关联
+                      default: true
+                reportTo:
+                  type: object
+                  description: 数据上报目标
+                  properties:
+                    serverAddress:
+                      type: string
+                      description: 'Server 访问地址，格式：host:port'
+                      default: "lightobs-server.lightobs.svc.cluster.local:8080"
+            status:
+              type: object
+              description: Operator 回写的运行时状态（只读）
+              properties:
+                phase:
+                  type: string
+                  description: 观测任务整体阶段
+                  enum: [Pending, Running, Failed]
+                observedNodes:
+                  type: integer
+                  description: 当前已就绪的 Agent 节点数
+                targetPodCount:
+                  type: integer
+                  description: 匹配 Selector 的 Running Pod 数量
+                conditions:
+                  type: array
+                  description: 细粒度状态条件列表
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", Unknown]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64
